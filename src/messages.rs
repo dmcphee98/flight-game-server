@@ -41,4 +41,8 @@ pub enum ServerMessage {
         player: Player,
         players: Vec<Player>,
     },
+    PlayerDisconnected {
+        player_id: Uuid,
+        players: Vec<Player>,
+    },
 }
