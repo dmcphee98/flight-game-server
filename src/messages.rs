@@ -2,6 +2,14 @@ use crate::state::Player;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// An incoming WebSocket frame sent from the client.
+pub enum ClientEvent {
+    Message(ClientMessage),
+    Close,
+    Skip,
+}
+
+/// A message sent from the client to the server over WebSocket.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
@@ -14,7 +22,8 @@ pub enum ClientMessage {
     },
 }
 
-#[derive(Debug, Serialize)]
+/// A message sent from the server to the client over WebSocket.
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     RoomCreated {
@@ -26,6 +35,10 @@ pub enum ServerMessage {
         room_code: String,
         host_id: Uuid,
         my_player_id: Uuid,
+        players: Vec<Player>,
+    },
+    PlayerJoined {
+        player: Player,
         players: Vec<Player>,
     },
 }

@@ -1,8 +1,10 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
+
+pub const BROADCAST_CAPACITY: usize = 16;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Player {
@@ -13,12 +15,19 @@ pub struct Player {
 pub struct Room {
     pub host_id: Uuid,
     pub players: Vec<Player>,
+    pub tx: broadcast::Sender<String>,
 }
 
 impl Room {
     /// Creates a new [`SharedRoom`] with the given host and initial players.
     pub fn shared(host_id: Uuid, players: Vec<Player>) -> SharedRoom {
-        Arc::new(RwLock::new(Self { host_id, players }))
+        let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
+        // Initial receiver intentionally dropped — each task calls tx.subscribe() when it joins.
+        Arc::new(RwLock::new(Self {
+            host_id,
+            players,
+            tx,
+        }))
     }
 }
 
