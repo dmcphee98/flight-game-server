@@ -101,6 +101,7 @@ class CdkStack(Stack):
             "RECORD_NAME": f"{subdomain}.{domain}",
             "GAME_SERVER_PORT": port,
             "ECR_REPO_URI": repo.repository_uri,
+            "ECR_REGISTRY": f"{self.account}.dkr.ecr.{self.region}.amazonaws.com",
             "AWS_REGION": self.region,
         }
         update_dns_sh = load_script("update-dns.sh", replacements)
