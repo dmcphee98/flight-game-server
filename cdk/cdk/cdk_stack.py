@@ -8,9 +8,12 @@ import os
 from aws_cdk import (
     Stack,
     Duration,
+    RemovalPolicy,
+    CfnOutput,
     aws_ec2 as ec2,
     aws_iam as iam,
     aws_route53 as route53,
+    aws_ecr as ecr,
 )
 from constructs import Construct
 
@@ -80,9 +83,16 @@ class CdkStack(Stack):
         sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(443),  "HTTPS / WSS")
 
         # --- IAM Role ---
-        role = iam.Role(self, "FlightGameInstanceRole",
+        instance_role = iam.Role(self, "FlightGameInstanceRole",
             assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
         )
+
+        # --- ECR ---
+        repo = ecr.Repository(self, "FlightGameRepo",
+            repository_name="flight-game-server",
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        repo.grant_pull(instance_role)
 
         # --- EC2 User Data ---
 
@@ -90,10 +100,12 @@ class CdkStack(Stack):
             "HOSTED_ZONE_ID": zone.hosted_zone_id,
             "RECORD_NAME": f"{subdomain}.{domain}",
             "GAME_SERVER_PORT": port,
+            "ECR_REPO_URI": repo.repository_uri,
+            "AWS_REGION": self.region,
         }
         update_dns_sh = load_script("update-dns.sh", replacements)
         update_dns_service = load_script("update-dns.service")
-        game_server_service = load_script("game-server.service")
+        game_server_service = load_script("game-server.service", replacements)
 
         user_data = ec2.UserData.for_linux()
         user_data.add_commands(
@@ -139,7 +151,7 @@ class CdkStack(Stack):
             vpc=vpc,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
             security_group=sg,
-            role=role,
+            role=instance_role,
             associate_public_ip_address=True,
             user_data=user_data,
         )
@@ -147,13 +159,13 @@ class CdkStack(Stack):
         # Permit EC2 instance to update A record in Route53 on boot.
         # Opted not to use Elastic IP address, so EC2 IP will change with every restart.
         # A record must be updated to point to this new IP each time.
-        role.add_to_policy(iam.PolicyStatement(
+        instance_role.add_to_policy(iam.PolicyStatement(
             actions=["route53:ChangeResourceRecordSets"],
             resources=[zone.hosted_zone_arn],
         ))
 
         # Permit EC2 instance to stop itself after the last player leaves
-        role.add_to_policy(iam.PolicyStatement(
+        instance_role.add_to_policy(iam.PolicyStatement(
             actions=["ec2:StopInstances"],
             resources=["*"],
             conditions={
@@ -163,6 +175,9 @@ class CdkStack(Stack):
 
         # Permit connections to EC2 instance via AWS Systems Manager
         # Can shell in via `aws ssm start-session` without opening port 22 or managing SSH keys.
-        role.add_managed_policy(
+        instance_role.add_managed_policy(
             iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMManagedInstanceCore")
         )
+
+        # --- Outputs ---
+        CfnOutput(self, "EcrRepoUri", value=repo.repository_uri)

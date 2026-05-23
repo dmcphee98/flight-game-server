@@ -4,24 +4,24 @@
 # then enabled with: systemctl enable game-server.service
 # so it starts automatically on every boot.
 
-# When started, the service launches the Rust binary at /usr/local/bin/game-server
-# and keeps it running, restarting it automatically if it crashes.
-
-# The Rust binary is copied onto the instance separately via scp after the
-# initial CDK deployment. It will not be present at deploy time.
+# When started, the service authenticates with ECR, pulls the latest image,
+# and runs it as a Docker container, restarting automatically if it crashes.
 
 [Unit]
 Description=Game WebSocket Server
-# Start this service after the network is fully up and Caddy is running
-After=network-online.target caddy.service
+# Start this service after the network is fully up and Docker is running
+After=network-online.target docker.service update-dns.service
 Wants=network-online.target
+Requires=docker.service
 
 [Service]
 Type=simple
-# Check that the Rust binary is present before starting
-ExecStartPre=/bin/test -f /usr/local/bin/game-server
-# Start the Rust binary
-ExecStart=/usr/local/bin/game-server
+# Authenticate with ECR before pulling
+ExecStartPre=/bin/bash -c 'aws ecr get-login-password --region {{AWS_REGION}} | docker login --username AWS --password-stdin {{ECR_REPO_URI}}'
+# Pull the latest image from ECR
+ExecStartPre=/usr/bin/docker pull {{ECR_REPO_URI}}:latest
+# Run the container
+ExecStart=/usr/bin/docker run --rm --name game-server -p {{GAME_SERVER_PORT}}:{{GAME_SERVER_PORT}} {{ECR_REPO_URI}}:latest
 # Automatically recover if the server crashes, but leave it stopped if it shut down intentionally
 Restart=on-failure
 RestartSec=5
