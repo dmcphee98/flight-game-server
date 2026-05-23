@@ -49,11 +49,17 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      # Required to use the GitHub Actions cache backend (type=gha).
+      # The default Docker driver does not support it.
+      # https://docs.docker.com/build/ci/github-actions/configure-builder/
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha         # Pull cached layers from GitHub Actions cache
+          cache-to: type=gha,mode=max  # Save all layers to GitHub Actions cache after build
