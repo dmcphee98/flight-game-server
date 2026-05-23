@@ -1,0 +1,30 @@
+# Defines the game WebSocket server as a systemd service.
+
+# This file should be copied to /etc/systemd/system/ during bootstrap,
+# then enabled with: systemctl enable game-server.service
+# so it starts automatically on every boot.
+
+# When started, the service launches the Rust binary at /usr/local/bin/game-server
+# and keeps it running, restarting it automatically if it crashes.
+
+# The Rust binary is copied onto the instance separately via scp after the
+# initial CDK deployment. It will not be present at deploy time.
+
+[Unit]
+Description=Game WebSocket Server
+# Start this service after the network is fully up and Caddy is running
+After=network-online.target caddy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Check that the Rust binary is present before starting
+ExecStartPre=/bin/test -f /usr/local/bin/game-server
+# Start the Rust binary
+ExecStart=/usr/local/bin/game-server
+# Automatically recover if the server crashes, but leave it stopped if it shut down intentionally
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

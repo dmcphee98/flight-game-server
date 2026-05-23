@@ -1,0 +1,25 @@
+# Defines a one-shot service that updates the Route 53 DNS A record with the
+# instance's current public IP address. This is needed because the instance
+# gets a new public IP on every reboot.
+
+# This file should be copied to /etc/systemd/system/ during bootstrap,
+# then enabled with: systemctl enable update-dns.service
+
+# When started, the service runs the script at /usr/local/bin/update-dns.sh
+# once and exits. It does not stay running like a persistent service.
+
+# It runs before Caddy starts, ensuring DNS is updated before the web server
+# comes up.
+
+[Unit]
+Description=Update Route 53 A record with current public IP
+Before=caddy.service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/update-dns.sh
+
+[Install]
+WantedBy=multi-user.target
