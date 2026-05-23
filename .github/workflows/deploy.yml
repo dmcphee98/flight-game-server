@@ -1,0 +1,59 @@
+name: Build & Push to ECR
+
+on:
+  # Deploy main branch automatically on push to main
+  push:
+    branches: [main]
+  # Allow manual deployment of arbitrary branch via GitHub UI
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to deploy
+        default: main
+
+env:
+  AWS_REGION: ap-southeast-2
+  ECR_REPOSITORY: flight-game-server
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for requesting the JWT for OIDC
+      contents: read   # Required for repo checkout
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Cache downloaded crates and compiled artifacts between runs,
+      # On cache hit, only changed code is recompiled rather than rebuilding from scratch.
+      # Reduces compile time on subsequent builds.
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
