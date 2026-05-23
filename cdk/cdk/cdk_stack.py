@@ -115,13 +115,18 @@ class CdkStack(Stack):
             "systemctl enable docker",
             "systemctl start docker",
 
+            # Create a shared network for Caddy and the game server
+            # Allows Caddy to reach the game server by container name
+            "docker network create game-network",
+
             # Write Caddyfile before starting container
             "mkdir -p /etc/caddy",
-            f"cat > /etc/caddy/Caddyfile << 'SCRIPT'\n{subdomain}.{domain} {{\n    reverse_proxy localhost:{port}\n}}\nSCRIPT",
+            f"cat > /etc/caddy/Caddyfile << 'SCRIPT'\n{subdomain}.{domain} {{\n    reverse_proxy game-server:{port}\n}}\nSCRIPT",
 
             # Pull and run Caddy
             "docker pull caddy",
             "docker run -d --name caddy --restart always \
+                --network game-network \
                 -p 80:80 -p 443:443 \
                 -v /etc/caddy/Caddyfile:/etc/caddy/Caddyfile \
                 -v caddy_data:/data \

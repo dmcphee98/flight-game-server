@@ -22,7 +22,7 @@ ExecStartPre=/bin/bash -c 'aws ecr get-login-password --region {{AWS_REGION}} | 
 # Pull the latest image from ECR
 ExecStartPre=/usr/bin/docker pull {{ECR_REPO_URI}}:latest
 # Run the container
-ExecStart=/usr/bin/docker run --rm --name game-server -p {{GAME_SERVER_PORT}}:{{GAME_SERVER_PORT}} {{ECR_REPO_URI}}:latest
+ExecStart=/usr/bin/docker run --rm --name game-server --network game-network -p {{GAME_SERVER_PORT}}:{{GAME_SERVER_PORT}} {{ECR_REPO_URI}}:latest
 # Automatically recover if the server crashes, but leave it stopped if it shut down intentionally
 Restart=on-failure
 RestartSec=5
