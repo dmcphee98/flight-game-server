@@ -24,7 +24,7 @@ async fn main() {
         .route("/ws", get(websocket_handler))
         .with_state(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     println!("Server running at {}", addr);
     axum::serve(listener, app).await.unwrap();
