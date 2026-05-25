@@ -51,15 +51,26 @@ async fn websocket_handler(
 async fn handle_socket(socket: WebSocket, state: SharedServerState) {
     let (mut sender, mut receiver) = socket.split();
 
-    // Phase 1: Wait for the client to send a valid CreateRoom or JoinRoom message.
-    // All other messages are ignored. The loop keeps running until the client
-    // either joins a room or closes the connection.
-    let (mut broadcast_rx, player_id, room_code) = loop {
+    // Phase 1: Wait for a CreateRoom or JoinRoom event.
+    // Continues to loop until either one is received, ignoring all other ClientMessage types.
+    let (player_id, room_code, mut broadcast_rx) = loop {
         let client_event = next_client_event(&mut receiver).await;
-        match process_client_event(client_event, &state, &mut sender).await {
-            Ok(Some(session)) => break session, // Room joined, session info is ready.
-            Ok(None) => continue,               // Unhandled message, keep waiting.
-            Err(_) => return,                   // Connection closed or error, exit.
+        let client_message = match classify_client_event(client_event) {
+            Ok(Some(msg)) => msg,
+            Ok(None) => continue,
+            Err(_) => return,
+        };
+        let result = match client_message {
+            ClientMessage::CreateRoom { player_name } => create_room(player_name, &state).await,
+            ClientMessage::JoinRoom {
+                room_code,
+                player_name,
+            } => join_room(room_code, player_name, &state).await,
+            _ => None,
+        };
+        if let Some((response, player_id, room_code, broadcast_rx)) = result {
+            let _ = send_response(&mut sender, &response).await;
+            break (player_id, room_code, broadcast_rx);
         }
     };
 
@@ -68,15 +79,15 @@ async fn handle_socket(socket: WebSocket, state: SharedServerState) {
     loop {
         tokio::select! {
             client_event = next_client_event(&mut receiver) => {
-                match process_client_event(client_event, &state, &mut sender).await {
-                    Ok(_) => {}      // Message handled or skipped, keep going.
-                    Err(_) => break, // Connection closed or error, exit.
+                match process_client_event(client_event, player_id, &room_code, &state).await {
+                    Ok(_) => continue, // Client event processed, continue looping.
+                    Err(_) => break,   // Channel closed or error, exit.
                 }
             }
             broadcast_event = broadcast_rx.recv() => {
                 match process_broadcast_event(broadcast_event, &mut sender).await {
-                    Ok(_) => {}      // Broadcast forwarded or lagged, keep going.
-                    Err(_) => break, // Channel closed or error, exit.
+                    Ok(_) => continue, // Broadcast processed or lagged, continue looping.
+                    Err(_) => break,   // Channel closed or error, exit.
                 }
             }
         }
@@ -103,48 +114,41 @@ async fn next_client_event(receiver: &mut SplitStream<WebSocket>) -> ClientEvent
     }
 }
 
-/// Processes a [`ClientEvent`], optionally returning session info if a room was joined or created.
+/// Classifies a raw [`ClientEvent`] into a structured result for the game loop.
 ///
-/// - [`ClientEvent::Message`] is dispatched to [`handle_client_message`]. If it results in a room
-///   being joined or created, the response is sent and the session info is returned.
-/// - [`ClientEvent::Skip`] returns `Ok(None)` — the message was unrecognized or malformed.
-/// - [`ClientEvent::Close`] returns `Err` to signal the connection should be closed.
-///
-/// Returns `Ok(None)` if no room was joined, `Ok(Some((rx, player_id, room_code)))` if a room
-/// was joined or created, and `Err` if the connection should be closed.
-async fn process_client_event(
-    event: ClientEvent,
-    state: &SharedServerState,
-    sender: &mut SplitSink<WebSocket, Message>,
-) -> anyhow::Result<Option<(broadcast::Receiver<String>, uuid::Uuid, String)>> {
+/// Returns:
+/// - `Ok(Some(msg))` — a valid message ready to be handled
+/// - `Ok(None)` — a non-fatal event to skip (e.g. a malformed message)
+/// - `Err` — the connection was closed; the caller should exit the loop
+fn classify_client_event(event: ClientEvent) -> anyhow::Result<Option<ClientMessage>> {
     match event {
         ClientEvent::Skip => Ok(None),
         ClientEvent::Close => anyhow::bail!("connection closed"),
-        ClientEvent::Message(client_msg) => {
-            if let Some((response, rx, player_id, room_code)) = handle_client_message(client_msg, state).await {
-                send_response(sender, &response).await?;
-                Ok(Some((rx, player_id, room_code)))
-            } else {
-                Ok(None)
-            }
-        }
+        ClientEvent::Message(msg) => Ok(Some(msg)),
     }
 }
 
-/// Routes an incoming [`ClientMessage`] to the appropriate handler.
-/// Returns a [`ServerMessage`], a broadcast receiver for the player's room, the player's ID,
-/// and the room code, or `None` if the operation fails (e.g., room not found).
-async fn handle_client_message(
-    msg: ClientMessage,
+/// Processes a single [`ClientEvent`] from a player in an active game session.
+///
+/// Classifies the event via [`classify_client_event`], then dispatches to the
+/// appropriate handler based on the message type. Messages that are not valid
+/// in the game phase (e.g. `CreateRoom`) are silently ignored.
+///
+/// Returns `Err` if the connection was closed, signalling the caller to exit the loop.
+async fn process_client_event(
+    event: ClientEvent,
+    player_id: uuid::Uuid,
+    room_code: &str,
     state: &SharedServerState,
-) -> Option<(ServerMessage, broadcast::Receiver<String>, uuid::Uuid, String)> {
+) -> anyhow::Result<()> {
+    let Some(msg) = classify_client_event(event)? else {
+        return Ok(());
+    };
     match msg {
-        ClientMessage::CreateRoom { player_name } => create_room(player_name, state).await,
-        ClientMessage::JoinRoom {
-            room_code,
-            player_name,
-        } => join_room(room_code, player_name, state).await,
+        ClientMessage::StartGame => start_game(player_id, room_code, state).await,
+        _ => {}
     }
+    Ok(())
 }
 
 /// Handles an event received from a room's broadcast channel.
@@ -174,7 +178,10 @@ async fn process_broadcast_event(
 /// Serializes a [`ServerMessage`] to JSON and sends it to the client as a WebSocket text frame.
 ///
 /// Returns `Err` if serialization fails or the WebSocket send fails.
-async fn send_response(sender: &mut SplitSink<WebSocket, Message>, response: &ServerMessage) -> anyhow::Result<()> {
+async fn send_response(
+    sender: &mut SplitSink<WebSocket, Message>,
+    response: &ServerMessage,
+) -> anyhow::Result<()> {
     let json = serde_json::to_string(&response)?;
     sender.send(Message::Text(json.into())).await?;
     Ok(())
@@ -186,7 +193,12 @@ async fn send_response(sender: &mut SplitSink<WebSocket, Message>, response: &Se
 async fn create_room(
     player_name: String,
     state: &SharedServerState,
-) -> Option<(ServerMessage, broadcast::Receiver<String>, uuid::Uuid, String)> {
+) -> Option<(
+    ServerMessage,
+    uuid::Uuid,
+    String,
+    broadcast::Receiver<String>,
+)> {
     let player_id = uuid::Uuid::new_v4();
     let room_code = generate_room_code();
     let player = Player {
@@ -206,9 +218,9 @@ async fn create_room(
             my_player_id: player_id,
             players,
         },
-        rx,
         player_id,
         room_code,
+        rx,
     ))
 }
 
@@ -223,7 +235,12 @@ async fn join_room(
     room_code: String,
     player_name: String,
     state: &SharedServerState,
-) -> Option<(ServerMessage, broadcast::Receiver<String>, uuid::Uuid, String)> {
+) -> Option<(
+    ServerMessage,
+    uuid::Uuid,
+    String,
+    broadcast::Receiver<String>,
+)> {
     let player_id = uuid::Uuid::new_v4();
     let player = Player {
         id: player_id,
@@ -252,14 +269,41 @@ async fn join_room(
             my_player_id: player_id,
             players: all_players,
         },
-        rx,
         player_id,
         room_code,
+        rx,
     ))
 }
 
+/// Starts the game for a room if the requesting player is the host and the game
+/// has not already started. Broadcasts `GameStarted` to all players with a
+/// timestamp 5 seconds in the future.
+async fn start_game(player_id: uuid::Uuid, room_code: &str, state: &SharedServerState) {
+    let room_arc = match state.rooms.read().await.get(room_code).cloned() {
+        Some(r) => r,
+        None => return,
+    };
+
+    let mut room = room_arc.write().await;
+
+    if room.host_id != player_id || room.started {
+        return;
+    }
+
+    room.started = true;
+
+    let starts_at_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        + 5_000;
+
+    let msg = ServerMessage::GameStarted { starts_at_unix_ms };
+    let _ = room.tx.send(serde_json::to_string(&msg).unwrap());
+}
+
 /// Removes the player from their room and broadcasts a `PlayerDisconnected` event
-/// to all remaining players.
+/// to all remaining players. If the room is now empty, removes it from the map.
 async fn disconnect_player(player_id: uuid::Uuid, room_code: &str, state: &SharedServerState) {
     let room_arc = match state.rooms.read().await.get(room_code).cloned() {
         Some(r) => r,

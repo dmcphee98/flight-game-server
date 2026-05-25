@@ -20,6 +20,7 @@ pub enum ClientMessage {
         room_code: String,
         player_name: String,
     },
+    StartGame,
 }
 
 /// A message sent from the server to the client over WebSocket.
@@ -44,5 +45,8 @@ pub enum ServerMessage {
     PlayerDisconnected {
         player_id: Uuid,
         players: Vec<Player>,
+    },
+    GameStarted {
+        starts_at_unix_ms: u64,
     },
 }

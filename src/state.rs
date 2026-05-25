@@ -16,6 +16,7 @@ pub struct Room {
     pub host_id: Uuid,
     pub players: Vec<Player>,
     pub tx: broadcast::Sender<String>,
+    pub started: bool,
 }
 
 impl Room {
@@ -27,6 +28,7 @@ impl Room {
             host_id,
             players,
             tx,
+            started: false,
         }))
     }
 }
