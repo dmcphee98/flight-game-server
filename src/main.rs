@@ -310,15 +310,21 @@ async fn disconnect_player(player_id: uuid::Uuid, room_code: &str, state: &Share
         None => return,
     };
 
-    let mut room = room_arc.write().await;
-    room.players.retain(|p| p.id != player_id);
-    let remaining = room.players.clone();
-
-    let msg = ServerMessage::PlayerDisconnected {
-        player_id,
-        players: remaining,
+    let remaining = {
+        let mut room = room_arc.write().await;
+        room.players.retain(|p| p.id != player_id);
+        let remaining = room.players.clone();
+        let msg = ServerMessage::PlayerDisconnected {
+            player_id,
+            players: remaining.clone(),
+        };
+        let _ = room.tx.send(serde_json::to_string(&msg).unwrap());
+        remaining
     };
-    let _ = room.tx.send(serde_json::to_string(&msg).unwrap());
+
+    if remaining.is_empty() {
+        state.rooms.write().await.remove(room_code);
+    }
 }
 
 /// Generates a random 4-character uppercase room code (e.g. `"XKQZ"`).
